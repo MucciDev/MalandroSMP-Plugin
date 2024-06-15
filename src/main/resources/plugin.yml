@@ -1,4 +1,18 @@
-name: SMP
-version: '${project.version}'
+name: MalandroSMP
+version: 1.0
 main: me.nezarc.smp.SMP
-api-version: '1.20'
+api-version: 1.20
+author: Nezarc
+description: >
+  Malandro SMP V2 - A semi-hardcore Minecraft server plugin where players aim to be the Last One Standing.
+commands:
+  giveheart:
+    description: Give a heart to another player.
+    usage: /giveheart <player>
+  smpadmin:
+    description: Admin commands for MalandroSMP plugin.
+    usage: /smpadmin <subcommand>
+permissions:
+  smp.admin:
+    description: Permission to use admin commands for MalandroSMP.
+    default: op
