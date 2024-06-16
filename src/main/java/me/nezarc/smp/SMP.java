@@ -1,6 +1,7 @@
 package me.nezarc.smp;
 
 import java.util.HashMap;
+import java.util.Map;
 import java.util.Random;
 import java.util.UUID;
 import java.util.logging.Logger;
@@ -12,10 +13,12 @@ import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.TabCompleter;
+import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.PlayerDeathEvent;
+import org.bukkit.event.player.PlayerLoginEvent;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.util.List;
@@ -23,14 +26,17 @@ import java.util.ArrayList;
 
 public final class SMP extends JavaPlugin implements Listener, CommandExecutor, TabCompleter {
     private Logger logger;
-    private HashMap<UUID, Integer> playerHearts = new HashMap<>();
+    private Map<UUID, Integer> playerHearts = new HashMap<>();
     private UUID malandro = null;
     private UUID malandroTarget = null;
+    private UUID previousMalandro = null;
+    private UUID previousMalandroTarget = null;
     private Random random = new Random();
+    private boolean sessionActive = false;
+    private boolean firstSession = true; // Track if it's the first session
 
     @Override
     public void onEnable() {
-        // Plugin startup logic
         logger = getLogger();
         logger.info("MalandroSMP a ligar");
 
@@ -42,26 +48,52 @@ public final class SMP extends JavaPlugin implements Listener, CommandExecutor, 
         this.getCommand("smpadmin").setExecutor(this);
         this.getCommand("smpadmin").setTabCompleter(this);
 
-        // Initialize players' max health
-        for (Player player : Bukkit.getOnlinePlayers()) {
-            initializePlayerHealth(player);
+        // Initialize players' max health if session is active
+        if (sessionActive) {
+            for (Player player : Bukkit.getOnlinePlayers()) {
+                initializePlayerHealth(player);
+            }
         }
 
-        // Schedule session tasks
-        scheduleMalandroSelection();
-        scheduleSessionTasks();
+        // Enforce whitelist if session is not active
+        if (!sessionActive) {
+            Bukkit.setWhitelist(true);
+        }
+
+        // Load saved player hearts from config (if available)
+        loadPlayerHearts();
     }
 
     @Override
     public void onDisable() {
-        // Plugin shutdown logic
         logger.info("MalandroSMP a desligar");
+
+        // Save player hearts to config
+        savePlayerHearts();
+    }
+
+    private void loadPlayerHearts() {
+        FileConfiguration config = getConfig();
+        for (String key : config.getConfigurationSection("playerHearts").getKeys(false)) {
+            UUID playerId = UUID.fromString(key);
+            int hearts = config.getInt("playerHearts." + key);
+            playerHearts.put(playerId, hearts);
+        }
+    }
+
+    private void savePlayerHearts() {
+        FileConfiguration config = getConfig();
+        for (Map.Entry<UUID, Integer> entry : playerHearts.entrySet()) {
+            config.set("playerHearts." + entry.getKey().toString(), entry.getValue());
+        }
+        saveConfig();
     }
 
     private void initializePlayerHealth(Player player) {
-        player.getAttribute(Attribute.GENERIC_MAX_HEALTH).setBaseValue(40.0); // 20 hearts
-        player.setHealth(40.0);
-        playerHearts.put(player.getUniqueId(), 40);
+        int maxHealth = firstSession ? 40 : playerHearts.getOrDefault(player.getUniqueId(), 20);
+        player.getAttribute(Attribute.GENERIC_MAX_HEALTH).setBaseValue(maxHealth);
+        player.setHealth(maxHealth);
+        playerHearts.put(player.getUniqueId(), maxHealth);
     }
 
     @EventHandler
@@ -93,100 +125,170 @@ public final class SMP extends JavaPlugin implements Listener, CommandExecutor, 
         }
     }
 
+    @EventHandler
+    public void onPlayerLogin(PlayerLoginEvent event) {
+        Player player = event.getPlayer();
+        if (!sessionActive && !player.isOp()) {
+            event.disallow(PlayerLoginEvent.Result.KICK_OTHER, "A sessão ainda não começou. Apenas operadores podem entrar.");
+        }
+    }
+
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (!(sender instanceof Player)) {
-            sender.sendMessage("Apenas players podem executar este comando.");
+            sender.sendMessage("Apenas jogadores podem executar este comando.");
             return true;
         }
 
         Player player = (Player) sender;
         if (command.getName().equalsIgnoreCase("giveheart")) {
-            if (args.length != 1) {
-                player.sendMessage("Exemplo: /giveheart <player>");
-                return true;
-            }
-
-            Player target = Bukkit.getPlayer(args[0]);
-            if (target == null || !target.isOnline()) {
-                player.sendMessage("Player não está online ou não foi encontrado.");
-                return true;
-            }
-
-            // Transfer heart
-            int playerHealth = playerHearts.get(player.getUniqueId());
-            if (playerHealth > 2) {
-                int targetHealth = playerHearts.get(target.getUniqueId());
-
-                playerHearts.put(player.getUniqueId(), playerHealth - 2);
-                playerHearts.put(target.getUniqueId(), targetHealth + 2);
-
-                player.getAttribute(Attribute.GENERIC_MAX_HEALTH).setBaseValue(playerHealth - 2);
-                target.getAttribute(Attribute.GENERIC_MAX_HEALTH).setBaseValue(targetHealth + 2);
-
-                player.sendMessage("Tu deste um coração ao " + target.getName());
-                target.sendMessage("Tu recebeste um coração de " + player.getName());
-            } else {
-                player.sendMessage("Não tens corações suficientes.");
-            }
-
-            return true;
+            return handleGiveHeartCommand(player, args);
         } else if (command.getName().equalsIgnoreCase("smpadmin")) {
-            if (!player.hasPermission("smp.admin")) {
-                player.sendMessage("Não tens permissão para executar este comando.");
-                return true;
-            }
+            return handleSmpAdminCommand(player, args);
+        }
 
-            if (args.length < 1) {
-                player.sendMessage("Exemplo: /smpadmin <subcommand>");
-                return true;
-            }
+        return false;
+    }
 
-            switch (args[0].toLowerCase()) {
-                case "sethearts":
-                    if (args.length != 3) {
-                        player.sendMessage("Exemplo: /smpadmin sethearts <player> <amount>");
-                        return true;
-                    }
-                    Player target = Bukkit.getPlayer(args[1]);
-                    if (target == null || !target.isOnline()) {
-                        player.sendMessage("Player não está online ou não foi encontrado.");
-                        return true;
-                    }
-                    int hearts;
-                    try {
-                        hearts = Integer.parseInt(args[2]);
-                    } catch (NumberFormatException e) {
-                        player.sendMessage("O valor de corações deve ser um número.");
-                        return true;
-                    }
-                    setPlayerHearts(target, hearts);
-                    player.sendMessage("Corações de " + target.getName() + " definidos para " + hearts / 2);
+    private boolean handleGiveHeartCommand(Player player, String[] args) {
+        if (args.length != 2) {
+            player.sendMessage("Uso: /giveheart <player> <amount>");
+            return true;
+        }
+
+        Player target = Bukkit.getPlayer(args[0]);
+        if (target == null || !target.isOnline()) {
+            player.sendMessage("O jogador não está online ou não foi encontrado.");
+            return true;
+        }
+
+        int heartsToGive;
+        try {
+            heartsToGive = Integer.parseInt(args[1]);
+        } catch (NumberFormatException e) {
+            player.sendMessage("A quantidade de corações deve ser um número inteiro.");
+            return true;
+        }
+
+        if (heartsToGive <= 0) {
+            player.sendMessage("A quantidade de corações deve ser maior que zero.");
+            return true;
+        }
+
+        int playerHealth = playerHearts.get(player.getUniqueId());
+
+        // Ensure the player has at least 5 hearts remaining after giving
+        if (playerHealth - (heartsToGive * 2) < 10) {
+            player.sendMessage("Não podes dar tantos corações. Deves manter pelo menos 5 corações.");
+            return true;
+        }
+
+        int targetHealth = playerHearts.getOrDefault(target.getUniqueId(), 20);
+
+        playerHearts.put(player.getUniqueId(), playerHealth - (heartsToGive * 2));
+        playerHearts.put(target.getUniqueId(), targetHealth + (heartsToGive * 2));
+
+        player.getAttribute(Attribute.GENERIC_MAX_HEALTH).setBaseValue(playerHealth - (heartsToGive * 2));
+        target.getAttribute(Attribute.GENERIC_MAX_HEALTH).setBaseValue(targetHealth + (heartsToGive * 2));
+
+        player.sendMessage("Deste " + heartsToGive + " corações para " + target.getName());
+        target.sendMessage("Recebeste " + heartsToGive + " corações de " + player.getName());
+
+        return true;
+    }
+
+    private boolean handleSmpAdminCommand(Player player, String[] args) {
+        if (args.length < 1) {
+            player.sendMessage("Uso: /smpadmin <subcomando>");
+            return true;
+        }
+
+        switch (args[0].toLowerCase()) {
+            case "sethearts":
+                if (args.length != 3) {
+                    player.sendMessage("Exemplo: /smpadmin sethearts <player> <amount>");
                     return true;
-                case "setmalandro":
-                    if (args.length != 2) {
-                        player.sendMessage("Exemplo: /smpadmin setmalandro <player>");
-                        return true;
-                    }
+                }
+                Player target = Bukkit.getPlayer(args[1]);
+                if (target == null || !target.isOnline()) {
+                    player.sendMessage("Player não está online ou não foi encontrado.");
+                    return true;
+                }
+                int hearts;
+                try {
+                    hearts = Integer.parseInt(args[2]);
+                } catch (NumberFormatException e) {
+                    player.sendMessage("O valor de corações deve ser um número.");
+                    return true;
+                }
+                setPlayerHearts(target, hearts);
+                player.sendMessage("Corações de " + target.getName() + " definidos para " + hearts / 2);
+                return true;
+            case "setmalandro":
+                if (args.length != 2) {
+                    player.sendMessage("Exemplo: /smpadmin setmalandro <player>");
+                    return true;
+                }
+                target = Bukkit.getPlayer(args[1]);
+                if (target == null || !target.isOnline()) {
+                    player.sendMessage("Player não está online ou não foi encontrado.");
+                    return true;
+                }
+                setMalandro(target);
+                player.sendMessage(target.getName() + " foi definido como o Malandro.");
+                return true;
+            case "endsession":
+                if (!sessionActive) {
+                    player.sendMessage("Nenhuma sessão está ativa.");
+                    return true;
+                }
+                endSession();
+                player.sendMessage("Sessão terminada.");
+                return true;
+            case "startsession":
+                if (sessionActive) {
+                    player.sendMessage("Já existe uma sessão ativa.");
+                    return true;
+                }
+                startSession();
+                player.sendMessage("Sessão iniciada.");
+                return true;
+            case "checkhearts":
+                if (args.length == 2) {
                     target = Bukkit.getPlayer(args[1]);
                     if (target == null || !target.isOnline()) {
                         player.sendMessage("Player não está online ou não foi encontrado.");
                         return true;
                     }
-                    setMalandro(target);
-                    player.sendMessage(target.getName() + " foi definido como o Malandro.");
-                    return true;
-                case "endSession":
-                    endSession();
-                    player.sendMessage("Sessão terminada e max health de todos os jogadores diminuída.");
-                    return true;
-                default:
-                    player.sendMessage("Subcomando desconhecido.");
-                    return true;
-            }
+                    player.sendMessage(target.getName() + " tem " + playerHearts.get(target.getUniqueId()) / 2 + " corações.");
+                } else {
+                    for (Player p : Bukkit.getOnlinePlayers()) {
+                        player.sendMessage(p.getName() + " tem " + playerHearts.get(p.getUniqueId()) / 2 + " corações.");
+                    }
+                }
+                return true;
+            case "checkmalandro":
+                if (malandro != null) {
+                    Player currentMalandro = Bukkit.getPlayer(malandro);
+                    Player currentTarget = Bukkit.getPlayer(malandroTarget);
+                    player.sendMessage("O Malandro atual é " + (currentMalandro != null ? currentMalandro.getName() : "N/A") +
+                            " com o alvo " + (currentTarget != null ? currentTarget.getName() : "N/A") + ".");
+                } else {
+                    player.sendMessage("Não há Malandro atualmente.");
+                }
+                if (previousMalandro != null) {
+                    Player previousMalandroPlayer = Bukkit.getPlayer(previousMalandro);
+                    Player previousTargetPlayer = Bukkit.getPlayer(previousMalandroTarget);
+                    player.sendMessage("O Malandro anterior era " + (previousMalandroPlayer != null ? previousMalandroPlayer.getName() : "N/A") +
+                            " com o alvo " + (previousTargetPlayer != null ? previousTargetPlayer.getName() : "N/A") + ".");
+                } else {
+                    player.sendMessage("Não há registros do Malandro anterior.");
+                }
+                return true;
+            default:
+                player.sendMessage("Subcomando desconhecido.");
+                return true;
         }
-
-        return false;
     }
 
     private void setPlayerHearts(Player player, int hearts) {
@@ -196,12 +298,44 @@ public final class SMP extends JavaPlugin implements Listener, CommandExecutor, 
     }
 
     private void setMalandro(Player player) {
+        previousMalandro = malandro;
+        previousMalandroTarget = malandroTarget;
+
         malandro = player.getUniqueId();
-        malandroTarget = Bukkit.getOnlinePlayers().toArray(new Player[0])[random.nextInt(Bukkit.getOnlinePlayers().size())].getUniqueId();
+        do {
+            malandroTarget = Bukkit.getOnlinePlayers().toArray(new Player[0])[random.nextInt(Bukkit.getOnlinePlayers().size())].getUniqueId();
+        } while (malandro.equals(malandroTarget));
+
         player.sendMessage("Foste definido como Malandro, o teu objetivo é matar " + Bukkit.getPlayer(malandroTarget).getName());
     }
 
+    private void startSession() {
+        sessionActive = true;
+        firstSession = false;
+
+        // Allow players to join
+        Bukkit.setWhitelist(false);
+
+        // Initialize players' health
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            initializePlayerHealth(player);
+        }
+
+        // Schedule tasks
+        scheduleMalandroSelection();
+        scheduleSessionEnd();
+    }
+
     private void endSession() {
+        sessionActive = false;
+
+        // Disallow new players from joining
+        Bukkit.setWhitelist(true);
+
+        // End session tasks
+        endAllTasks();
+
+        // Reduce players' max health
         for (UUID playerId : playerHearts.keySet()) {
             Player player = Bukkit.getPlayer(playerId);
             if (player != null) {
@@ -220,38 +354,30 @@ public final class SMP extends JavaPlugin implements Listener, CommandExecutor, 
 
     private void scheduleMalandroSelection() {
         // Schedule the selection of a new Malandro at the start of each session
-        Bukkit.getScheduler().runTaskTimer(this, () -> {
+        Bukkit.getScheduler().runTaskLater(this, () -> {
             Player[] players = Bukkit.getOnlinePlayers().toArray(new Player[0]);
             if (players.length > 0) {
-                malandro = players[random.nextInt(players.length)].getUniqueId();
-                malandroTarget = players[random.nextInt(players.length)].getUniqueId();
+                do {
+                    malandro = players[random.nextInt(players.length)].getUniqueId();
+                    malandroTarget = players[random.nextInt(players.length)].getUniqueId();
+                } while (malandro.equals(malandroTarget));
+
                 Player malandroPlayer = Bukkit.getPlayer(malandro);
                 Player targetPlayer = Bukkit.getPlayer(malandroTarget);
                 if (malandroPlayer != null && targetPlayer != null) {
                     malandroPlayer.sendMessage("Foste escolhido como Malandro, o teu objetivo é matar " + targetPlayer.getName());
                 }
             }
-        }, 0L, 108000L); // 108000 ticks = 3 hours
+        }, 200L); // Give some time after session starts
     }
 
-    private void scheduleSessionTasks() {
-        // Decrease max health of all players at the end of each session
-        Bukkit.getScheduler().runTaskTimer(this, () -> {
-            for (UUID playerId : playerHearts.keySet()) {
-                Player player = Bukkit.getPlayer(playerId);
-                if (player != null) {
-                    int newHealth = playerHearts.get(playerId) - 2;
-                    playerHearts.put(playerId, newHealth);
-                    player.getAttribute(Attribute.GENERIC_MAX_HEALTH).setBaseValue(newHealth);
-                    if (newHealth < 10) {
-                        player.setHealth(0.0); // eliminate player
-                        Bukkit.broadcastMessage(player.getName() + " foi eliminado!");
-                        player.kickPlayer("Foste eliminado do MalandroSMP");
-                        Bukkit.getBanList(BanList.Type.NAME).addBan(player.getName(), "Foste eliminado seu malandro", null, null);
-                    }
-                }
-            }
-        }, 108000L, 108000L); // 108000 ticks = 3 hours
+    private void scheduleSessionEnd() {
+        // Schedule the session to end in 3 hours
+        Bukkit.getScheduler().runTaskLater(this, this::endSession, 108000L); // 108000 ticks = 3 hours
+    }
+
+    private void endAllTasks() {
+        Bukkit.getScheduler().cancelTasks(this);
     }
 
     @Override
@@ -262,14 +388,11 @@ public final class SMP extends JavaPlugin implements Listener, CommandExecutor, 
                 subcommands.add("sethearts");
                 subcommands.add("setmalandro");
                 subcommands.add("endsession");
+                subcommands.add("startsession");
+                subcommands.add("checkhearts");
+                subcommands.add("checkmalandro");
                 return subcommands;
-            } else if (args.length == 2 && args[0].equalsIgnoreCase("sethearts")) {
-                List<String> playerNames = new ArrayList<>();
-                for (Player player : Bukkit.getOnlinePlayers()) {
-                    playerNames.add(player.getName());
-                }
-                return playerNames;
-            } else if (args.length == 2 && args[0].equalsIgnoreCase("setmalandro")) {
+            } else if (args.length == 2 && (args[0].equalsIgnoreCase("sethearts") || args[0].equalsIgnoreCase("setmalandro") || args[0].equalsIgnoreCase("checkhearts"))) {
                 List<String> playerNames = new ArrayList<>();
                 for (Player player : Bukkit.getOnlinePlayers()) {
                     playerNames.add(player.getName());
