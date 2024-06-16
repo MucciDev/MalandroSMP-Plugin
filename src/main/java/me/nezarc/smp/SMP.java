@@ -1,11 +1,5 @@
 package me.nezarc.smp;
 
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Random;
-import java.util.UUID;
-import java.util.logging.Logger;
-
 import org.bukkit.BanList;
 import org.bukkit.Bukkit;
 import org.bukkit.attribute.Attribute;
@@ -21,11 +15,9 @@ import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.event.player.PlayerLoginEvent;
 import org.bukkit.plugin.java.JavaPlugin;
 
-import java.util.List;
-import java.util.ArrayList;
+import java.util.*;
 
 public final class SMP extends JavaPlugin implements Listener, CommandExecutor, TabCompleter {
-    private Logger logger;
     private Map<UUID, Integer> playerHearts = new HashMap<>();
     private UUID malandro = null;
     private UUID malandroTarget = null;
@@ -37,36 +29,28 @@ public final class SMP extends JavaPlugin implements Listener, CommandExecutor, 
 
     @Override
     public void onEnable() {
-        logger = getLogger();
-        logger.info("MalandroSMP a ligar");
+        getLogger().info("MalandroSMP está ligando.");
 
-        // Register events
+        // Register events and commands
         getServer().getPluginManager().registerEvents(this, this);
-
-        // Register commands
-        this.getCommand("giveheart").setExecutor(this);
-        this.getCommand("smpadmin").setExecutor(this);
-        this.getCommand("smpadmin").setTabCompleter(this);
-
-        // Initialize players' max health if session is active
-        if (sessionActive) {
-            for (Player player : Bukkit.getOnlinePlayers()) {
-                initializePlayerHealth(player);
-            }
-        }
-
-        // Enforce whitelist if session is not active
-        if (!sessionActive) {
-            Bukkit.setWhitelist(true);
-        }
+        getCommand("giveheart").setExecutor(this);
+        getCommand("smpadmin").setExecutor(this);
+        getCommand("smpadmin").setTabCompleter(this);
 
         // Load saved player hearts from config (if available)
         loadPlayerHearts();
+
+        // Initialize or enforce whitelist based on session status
+        if (sessionActive) {
+            Bukkit.getOnlinePlayers().forEach(this::initializePlayerHealth);
+        } else {
+            Bukkit.setWhitelist(true);
+        }
     }
 
     @Override
     public void onDisable() {
-        logger.info("MalandroSMP a desligar");
+        getLogger().info("MalandroSMP está desligando.");
 
         // Save player hearts to config
         savePlayerHearts();
@@ -74,17 +58,19 @@ public final class SMP extends JavaPlugin implements Listener, CommandExecutor, 
 
     private void loadPlayerHearts() {
         FileConfiguration config = getConfig();
-        for (String key : config.getConfigurationSection("playerHearts").getKeys(false)) {
-            UUID playerId = UUID.fromString(key);
-            int hearts = config.getInt("playerHearts." + key);
-            playerHearts.put(playerId, hearts);
+        if (config.contains("playerHearts")) {
+            for (String key : config.getConfigurationSection("playerHearts").getKeys(false)) {
+                UUID playerId = UUID.fromString(key);
+                int hearts = config.getInt("playerHearts." + key);
+                playerHearts.put(playerId, hearts);
+            }
         }
     }
 
     private void savePlayerHearts() {
         FileConfiguration config = getConfig();
-        for (Map.Entry<UUID, Integer> entry : playerHearts.entrySet()) {
-            config.set("playerHearts." + entry.getKey().toString(), entry.getValue());
+        for (UUID playerId : playerHearts.keySet()) {
+            config.set("playerHearts." + playerId.toString(), playerHearts.get(playerId));
         }
         saveConfig();
     }
@@ -111,7 +97,7 @@ public final class SMP extends JavaPlugin implements Listener, CommandExecutor, 
 
         // Update killer's hearts if applicable
         if (killer != null) {
-            int newKillerHealth = playerHearts.get(killer.getUniqueId()) + gainedHearts;
+            int newKillerHealth = playerHearts.getOrDefault(killer.getUniqueId(), 20) + gainedHearts;
             playerHearts.put(killer.getUniqueId(), newKillerHealth);
             killer.getAttribute(Attribute.GENERIC_MAX_HEALTH).setBaseValue(newKillerHealth);
         }
@@ -119,7 +105,7 @@ public final class SMP extends JavaPlugin implements Listener, CommandExecutor, 
         // Check for elimination
         if (newHealth < 10) { // less than 5 hearts
             player.setHealth(0.0); // eliminate player
-            Bukkit.broadcastMessage(player.getName() + " foi eliminado :(");
+            Bukkit.broadcastMessage(player.getName() + " foi eliminado.");
             player.kickPlayer("Foste eliminado do MalandroSMP");
             Bukkit.getBanList(BanList.Type.NAME).addBan(player.getName(), "Foste eliminado seu malandro", null, null);
         }
@@ -260,7 +246,7 @@ public final class SMP extends JavaPlugin implements Listener, CommandExecutor, 
                         player.sendMessage("Player não está online ou não foi encontrado.");
                         return true;
                     }
-                    player.sendMessage(target.getName() + " tem " + playerHearts.get(target.getUniqueId()) / 2 + " corações.");
+                    player.sendMessage(target.getName() + " tem " + playerHearts                            .get(target.getUniqueId()) / 2 + " corações.");
                 } else {
                     for (Player p : Bukkit.getOnlinePlayers()) {
                         player.sendMessage(p.getName() + " tem " + playerHearts.get(p.getUniqueId()) / 2 + " corações.");
@@ -317,9 +303,7 @@ public final class SMP extends JavaPlugin implements Listener, CommandExecutor, 
         Bukkit.setWhitelist(false);
 
         // Initialize players' health
-        for (Player player : Bukkit.getOnlinePlayers()) {
-            initializePlayerHealth(player);
-        }
+        Bukkit.getOnlinePlayers().forEach(this::initializePlayerHealth);
 
         // Schedule tasks
         scheduleMalandroSelection();
@@ -384,13 +368,7 @@ public final class SMP extends JavaPlugin implements Listener, CommandExecutor, 
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
         if (command.getName().equalsIgnoreCase("smpadmin")) {
             if (args.length == 1) {
-                List<String> subcommands = new ArrayList<>();
-                subcommands.add("sethearts");
-                subcommands.add("setmalandro");
-                subcommands.add("endsession");
-                subcommands.add("startsession");
-                subcommands.add("checkhearts");
-                subcommands.add("checkmalandro");
+                List<String> subcommands = Arrays.asList("sethearts", "setmalandro", "endsession", "startsession", "checkhearts", "checkmalandro");
                 return subcommands;
             } else if (args.length == 2 && (args[0].equalsIgnoreCase("sethearts") || args[0].equalsIgnoreCase("setmalandro") || args[0].equalsIgnoreCase("checkhearts"))) {
                 List<String> playerNames = new ArrayList<>();
@@ -403,3 +381,4 @@ public final class SMP extends JavaPlugin implements Listener, CommandExecutor, 
         return null;
     }
 }
+
