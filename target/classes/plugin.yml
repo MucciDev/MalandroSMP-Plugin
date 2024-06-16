@@ -1,4 +1,0 @@
-name: SMP
-version: '1.0-SNAPSHOT'
-main: me.nezarc.smp.SMP
-api-version: '1.20'
