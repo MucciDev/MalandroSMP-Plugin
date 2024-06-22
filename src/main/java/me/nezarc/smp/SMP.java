@@ -1,5 +1,11 @@
 package me.nezarc.smp;
 
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Random;
+import java.util.UUID;
+import java.util.logging.Logger;
+
 import org.bukkit.BanList;
 import org.bukkit.Bukkit;
 import org.bukkit.attribute.Attribute;
@@ -15,9 +21,11 @@ import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.event.player.PlayerLoginEvent;
 import org.bukkit.plugin.java.JavaPlugin;
 
-import java.util.*;
+import java.util.List;
+import java.util.ArrayList;
 
 public final class SMP extends JavaPlugin implements Listener, CommandExecutor, TabCompleter {
+    private Logger logger;
     private Map<UUID, Integer> playerHearts = new HashMap<>();
     private UUID malandro = null;
     private UUID malandroTarget = null;
@@ -25,32 +33,40 @@ public final class SMP extends JavaPlugin implements Listener, CommandExecutor, 
     private UUID previousMalandroTarget = null;
     private Random random = new Random();
     private boolean sessionActive = false;
-    private boolean firstSession = true;
+    private boolean firstSession = true; // Track if it's the first session
 
     @Override
     public void onEnable() {
-        getLogger().info("MalandroSMP está ligando.");
+        logger = getLogger();
+        logger.info("MalandroSMP a ligar");
 
-        // Register events and commands
+        // Register events
         getServer().getPluginManager().registerEvents(this, this);
-        getCommand("giveheart").setExecutor(this);
-        getCommand("smpadmin").setExecutor(this);
-        getCommand("smpadmin").setTabCompleter(this);
+
+        // Register commands
+        this.getCommand("giveheart").setExecutor(this);
+        this.getCommand("smpadmin").setExecutor(this);
+        this.getCommand("smpadmin").setTabCompleter(this);
+
+        // Initialize players' max health if session is active
+        if (sessionActive) {
+            for (Player player : Bukkit.getOnlinePlayers()) {
+                initializePlayerHealth(player);
+            }
+        }
+
+        // Enforce whitelist if session is not active
+        if (!sessionActive) {
+            Bukkit.setWhitelist(true);
+        }
 
         // Load saved player hearts from config (if available)
         loadPlayerHearts();
-
-        // Initialize or enforce whitelist based on session status
-        if (sessionActive) {
-            Bukkit.getOnlinePlayers().forEach(this::initializePlayerHealth);
-        } else {
-            Bukkit.setWhitelist(true);
-        }
     }
 
     @Override
     public void onDisable() {
-        getLogger().info("MalandroSMP está desligando.");
+        logger.info("MalandroSMP a desligar");
 
         // Save player hearts to config
         savePlayerHearts();
@@ -58,19 +74,17 @@ public final class SMP extends JavaPlugin implements Listener, CommandExecutor, 
 
     private void loadPlayerHearts() {
         FileConfiguration config = getConfig();
-        if (config.contains("playerHearts")) {
-            for (String key : config.getConfigurationSection("playerHearts").getKeys(false)) {
-                UUID playerId = UUID.fromString(key);
-                int hearts = config.getInt("playerHearts." + key);
-                playerHearts.put(playerId, hearts);
-            }
+        for (String key : config.getConfigurationSection("playerHearts").getKeys(false)) {
+            UUID playerId = UUID.fromString(key);
+            int hearts = config.getInt("playerHearts." + key);
+            playerHearts.put(playerId, hearts);
         }
     }
 
     private void savePlayerHearts() {
         FileConfiguration config = getConfig();
-        for (UUID playerId : playerHearts.keySet()) {
-            config.set("playerHearts." + playerId.toString(), playerHearts.get(playerId));
+        for (Map.Entry<UUID, Integer> entry : playerHearts.entrySet()) {
+            config.set("playerHearts." + entry.getKey().toString(), entry.getValue());
         }
         saveConfig();
     }
@@ -97,7 +111,7 @@ public final class SMP extends JavaPlugin implements Listener, CommandExecutor, 
 
         // Update killer's hearts if applicable
         if (killer != null) {
-            int newKillerHealth = playerHearts.getOrDefault(killer.getUniqueId(), 20) + gainedHearts;
+            int newKillerHealth = playerHearts.get(killer.getUniqueId()) + gainedHearts;
             playerHearts.put(killer.getUniqueId(), newKillerHealth);
             killer.getAttribute(Attribute.GENERIC_MAX_HEALTH).setBaseValue(newKillerHealth);
         }
@@ -105,7 +119,7 @@ public final class SMP extends JavaPlugin implements Listener, CommandExecutor, 
         // Check for elimination
         if (newHealth < 10) { // less than 5 hearts
             player.setHealth(0.0); // eliminate player
-            Bukkit.broadcastMessage(player.getName() + " foi eliminado.");
+            Bukkit.broadcastMessage(player.getName() + " foi eliminado :(");
             player.kickPlayer("Foste eliminado do MalandroSMP");
             Bukkit.getBanList(BanList.Type.NAME).addBan(player.getName(), "Foste eliminado seu malandro", null, null);
         }
@@ -189,21 +203,18 @@ public final class SMP extends JavaPlugin implements Listener, CommandExecutor, 
             return true;
         }
 
-        String subCommand = args[0].toLowerCase();
-        Player target;
-        int hearts;
-
-        switch (subCommand) {
+        switch (args[0].toLowerCase()) {
             case "sethearts":
                 if (args.length != 3) {
                     player.sendMessage("Exemplo: /smpadmin sethearts <player> <amount>");
                     return true;
                 }
-                target = Bukkit.getPlayer(args[1]);
+                Player target = Bukkit.getPlayer(args[1]);
                 if (target == null || !target.isOnline()) {
                     player.sendMessage("Player não está online ou não foi encontrado.");
                     return true;
                 }
+                int hearts;
                 try {
                     hearts = Integer.parseInt(args[2]);
                 } catch (NumberFormatException e) {
@@ -213,7 +224,6 @@ public final class SMP extends JavaPlugin implements Listener, CommandExecutor, 
                 setPlayerHearts(target, hearts);
                 player.sendMessage("Corações de " + target.getName() + " definidos para " + hearts / 2);
                 return true;
-
             case "setmalandro":
                 if (args.length != 2) {
                     player.sendMessage("Exemplo: /smpadmin setmalandro <player>");
@@ -227,7 +237,6 @@ public final class SMP extends JavaPlugin implements Listener, CommandExecutor, 
                 setMalandro(target);
                 player.sendMessage(target.getName() + " foi definido como o Malandro.");
                 return true;
-
             case "endsession":
                 if (!sessionActive) {
                     player.sendMessage("Nenhuma sessão está ativa.");
@@ -236,7 +245,6 @@ public final class SMP extends JavaPlugin implements Listener, CommandExecutor, 
                 endSession();
                 player.sendMessage("Sessão terminada.");
                 return true;
-
             case "startsession":
                 if (sessionActive) {
                     player.sendMessage("Já existe uma sessão ativa.");
@@ -245,7 +253,6 @@ public final class SMP extends JavaPlugin implements Listener, CommandExecutor, 
                 startSession();
                 player.sendMessage("Sessão iniciada.");
                 return true;
-
             case "checkhearts":
                 if (args.length == 2) {
                     target = Bukkit.getPlayer(args[1]);
@@ -260,11 +267,10 @@ public final class SMP extends JavaPlugin implements Listener, CommandExecutor, 
                     }
                 }
                 return true;
-
             case "checkmalandro":
-                Player currentMalandro = Bukkit.getPlayer(malandro);
-                Player currentTarget = Bukkit.getPlayer(malandroTarget);
                 if (malandro != null) {
+                    Player currentMalandro = Bukkit.getPlayer(malandro);
+                    Player currentTarget = Bukkit.getPlayer(malandroTarget);
                     player.sendMessage("O Malandro atual é " + (currentMalandro != null ? currentMalandro.getName() : "N/A") +
                             " com o alvo " + (currentTarget != null ? currentTarget.getName() : "N/A") + ".");
                 } else {
@@ -279,7 +285,6 @@ public final class SMP extends JavaPlugin implements Listener, CommandExecutor, 
                     player.sendMessage("Não há registros do Malandro anterior.");
                 }
                 return true;
-
             default:
                 player.sendMessage("Subcomando desconhecido.");
                 return true;
@@ -312,7 +317,9 @@ public final class SMP extends JavaPlugin implements Listener, CommandExecutor, 
         Bukkit.setWhitelist(false);
 
         // Initialize players' health
-        Bukkit.getOnlinePlayers().forEach(this::initializePlayerHealth);
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            initializePlayerHealth(player);
+        }
 
         // Schedule tasks
         scheduleMalandroSelection();
@@ -377,7 +384,13 @@ public final class SMP extends JavaPlugin implements Listener, CommandExecutor, 
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
         if (command.getName().equalsIgnoreCase("smpadmin")) {
             if (args.length == 1) {
-                List<String> subcommands = Arrays.asList("sethearts", "setmalandro", "endsession", "startsession", "checkhearts", "checkmalandro");
+                List<String> subcommands = new ArrayList<>();
+                subcommands.add("sethearts");
+                subcommands.add("setmalandro");
+                subcommands.add("endsession");
+                subcommands.add("startsession");
+                subcommands.add("checkhearts");
+                subcommands.add("checkmalandro");
                 return subcommands;
             } else if (args.length == 2 && (args[0].equalsIgnoreCase("sethearts") || args[0].equalsIgnoreCase("setmalandro") || args[0].equalsIgnoreCase("checkhearts"))) {
                 List<String> playerNames = new ArrayList<>();
