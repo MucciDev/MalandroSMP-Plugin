@@ -25,7 +25,7 @@ public final class SMP extends JavaPlugin implements Listener, CommandExecutor, 
     private UUID previousMalandroTarget = null;
     private Random random = new Random();
     private boolean sessionActive = false;
-    private boolean firstSession = true; // Track if it's the first session
+    private boolean firstSession = true;
 
     @Override
     public void onEnable() {
@@ -189,18 +189,21 @@ public final class SMP extends JavaPlugin implements Listener, CommandExecutor, 
             return true;
         }
 
-        switch (args[0].toLowerCase()) {
+        String subCommand = args[0].toLowerCase();
+        Player target;
+        int hearts;
+
+        switch (subCommand) {
             case "sethearts":
                 if (args.length != 3) {
                     player.sendMessage("Exemplo: /smpadmin sethearts <player> <amount>");
                     return true;
                 }
-                Player target = Bukkit.getPlayer(args[1]);
+                target = Bukkit.getPlayer(args[1]);
                 if (target == null || !target.isOnline()) {
                     player.sendMessage("Player não está online ou não foi encontrado.");
                     return true;
                 }
-                int hearts;
                 try {
                     hearts = Integer.parseInt(args[2]);
                 } catch (NumberFormatException e) {
@@ -210,6 +213,7 @@ public final class SMP extends JavaPlugin implements Listener, CommandExecutor, 
                 setPlayerHearts(target, hearts);
                 player.sendMessage("Corações de " + target.getName() + " definidos para " + hearts / 2);
                 return true;
+
             case "setmalandro":
                 if (args.length != 2) {
                     player.sendMessage("Exemplo: /smpadmin setmalandro <player>");
@@ -223,6 +227,7 @@ public final class SMP extends JavaPlugin implements Listener, CommandExecutor, 
                 setMalandro(target);
                 player.sendMessage(target.getName() + " foi definido como o Malandro.");
                 return true;
+
             case "endsession":
                 if (!sessionActive) {
                     player.sendMessage("Nenhuma sessão está ativa.");
@@ -231,6 +236,7 @@ public final class SMP extends JavaPlugin implements Listener, CommandExecutor, 
                 endSession();
                 player.sendMessage("Sessão terminada.");
                 return true;
+
             case "startsession":
                 if (sessionActive) {
                     player.sendMessage("Já existe uma sessão ativa.");
@@ -239,6 +245,7 @@ public final class SMP extends JavaPlugin implements Listener, CommandExecutor, 
                 startSession();
                 player.sendMessage("Sessão iniciada.");
                 return true;
+
             case "checkhearts":
                 if (args.length == 2) {
                     target = Bukkit.getPlayer(args[1]);
@@ -246,17 +253,18 @@ public final class SMP extends JavaPlugin implements Listener, CommandExecutor, 
                         player.sendMessage("Player não está online ou não foi encontrado.");
                         return true;
                     }
-                    player.sendMessage(target.getName() + " tem " + playerHearts                            .get(target.getUniqueId()) / 2 + " corações.");
+                    player.sendMessage(target.getName() + " tem " + playerHearts.get(target.getUniqueId()) / 2 + " corações.");
                 } else {
                     for (Player p : Bukkit.getOnlinePlayers()) {
                         player.sendMessage(p.getName() + " tem " + playerHearts.get(p.getUniqueId()) / 2 + " corações.");
                     }
                 }
                 return true;
+
             case "checkmalandro":
+                Player currentMalandro = Bukkit.getPlayer(malandro);
+                Player currentTarget = Bukkit.getPlayer(malandroTarget);
                 if (malandro != null) {
-                    Player currentMalandro = Bukkit.getPlayer(malandro);
-                    Player currentTarget = Bukkit.getPlayer(malandroTarget);
                     player.sendMessage("O Malandro atual é " + (currentMalandro != null ? currentMalandro.getName() : "N/A") +
                             " com o alvo " + (currentTarget != null ? currentTarget.getName() : "N/A") + ".");
                 } else {
@@ -271,6 +279,7 @@ public final class SMP extends JavaPlugin implements Listener, CommandExecutor, 
                     player.sendMessage("Não há registros do Malandro anterior.");
                 }
                 return true;
+
             default:
                 player.sendMessage("Subcomando desconhecido.");
                 return true;
@@ -381,4 +390,3 @@ public final class SMP extends JavaPlugin implements Listener, CommandExecutor, 
         return null;
     }
 }
-
